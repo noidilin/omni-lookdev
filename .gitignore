@@ -12,3 +12,5 @@ data/generated/
 validation/artifacts/
 frontend/dist/
 frontend/node_modules/
+
+studio/textures
