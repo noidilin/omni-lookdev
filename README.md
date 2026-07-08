@@ -29,6 +29,7 @@ Runtime requirements:
 - Python 3.10 or 3.11 for the server
 
 See `docs/runtime-setup.md` for device-specific WSL2 and native Windows runtime findings.
+See `docs/development-runbook.md` for toolchain and debugging issues encountered during viewer development.
 
 ## Workspace Layout
 
