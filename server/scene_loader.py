@@ -143,12 +143,8 @@ def Scope "Render"
             rel camera = <{OV_CAMERA_PRIM}>
             rel orderedVars = [
                 </Render/Vars/LdrColor>,
-                </Render/Vars/HdrColor>,
                 </Render/Vars/Depth>,
-                </Render/Vars/Normal>,
-                </Render/Vars/InstanceSeg>,
-                </Render/Vars/SemanticSeg>,
-                </Render/Vars/Diffuse>
+                </Render/Vars/Normal>
             ]
             uniform int2 resolution = ({safe_width}, {safe_height})
             uint[] deviceIds = [0]
@@ -161,10 +157,6 @@ def Scope "Render"
         {{
             uniform string sourceName = "LdrColor"
         }}
-        def RenderVar "HdrColor"
-        {{
-            uniform string sourceName = "HdrColor"
-        }}
         def RenderVar "Depth"
         {{
             uniform string sourceName = "DepthSD"
@@ -172,18 +164,6 @@ def Scope "Render"
         def RenderVar "Normal"
         {{
             uniform string sourceName = "NormalSD"
-        }}
-        def RenderVar "InstanceSeg"
-        {{
-            uniform string sourceName = "InstanceSegmentationSD"
-        }}
-        def RenderVar "SemanticSeg"
-        {{
-            uniform string sourceName = "SemanticSegmentationSD"
-        }}
-        def RenderVar "Diffuse"
-        {{
-            uniform string sourceName = "DiffuseAlbedoSD"
         }}
     }}
 

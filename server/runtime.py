@@ -16,6 +16,7 @@ from .camera_controller import OrbitCamera
 from .config import LOOKDEV_ASSET_PRIM, OV_CAMERA_PRIM, OV_RENDER_PRODUCT, ServerConfig
 from .input_router import InputRouter
 from .message_router import MessageRouter
+from .render_settings import DEBUG_AOV_NAMES, aov_options_payload
 from .scene_loader import make_lookdev_composite
 from .selection_controller import SelectionController
 from .settings_store import SettingsStore
@@ -47,8 +48,13 @@ class LookdevRuntime:
         self.stream = None
         self.ovrtx = None
         self.ovstream = None
+        self.wp = None
+        self._aov_converter = None
         self._last_frame = None
-        self._active_aov = self.settings.render_settings().get("aov", "LdrColor")
+        stored_aov = str(self.settings.render_settings().get("aov", "LdrColor"))
+        self._active_aov = stored_aov if stored_aov in DEBUG_AOV_NAMES else "LdrColor"
+        self._available_aovs = {"LdrColor"}
+        self._last_aov_error = ""
         self._stream_uses_tensor_input = False
         self._last_stream_error = ""
         self.stage_version = 0
@@ -88,19 +94,49 @@ class LookdevRuntime:
             pass
 
     def available_aovs(self) -> list[str]:
-        return ["LdrColor", "HdrColor", "DepthSD", "NormalSD", "InstanceSegmentationSD", "SemanticSegmentationSD", "DiffuseAlbedoSD"]
+        return [name for name in DEBUG_AOV_NAMES if name in self._available_aovs] or ["LdrColor"]
+
+    def active_aov_state(self, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = {
+            "active": self._active_aov,
+            "available": self.available_aovs(),
+            "options": aov_options_payload(),
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    def send_aov_state(self, extra: dict[str, Any] | None = None) -> None:
+        available = self.available_aovs()
+        self.send("activeAOVState", self.active_aov_state(extra))
+        self.send("availableAOVsResult", {"aovs": available, "available": available, "options": aov_options_payload()})
+
+    def set_active_aov(self, requested: str) -> bool:
+        if requested not in DEBUG_AOV_NAMES:
+            return False
+        if requested not in self._available_aovs:
+            return False
+        self._active_aov = requested
+        self.settings.render_settings()["aov"] = requested
+        self.settings.save()
+        return True
 
     def _import_runtime(self) -> None:
         try:
             import ovrtx
             import ovstream
+            import warp as wp
         except ImportError as exc:
             raise RuntimeNotAvailable(
                 "Missing ovrtx/ovstream runtime. Run `mise run setup:server:win` on native Windows "
                 "or `mise run setup:server` on a supported Linux RTX host."
             ) from exc
+        from .aov_conversion import AOVFrameConverter
+
         self.ovrtx = ovrtx
         self.ovstream = ovstream
+        self.wp = wp
+        self._aov_converter = AOVFrameConverter()
 
     def _construct_renderer(self) -> None:
         ovrtx = self.ovrtx
@@ -167,6 +203,7 @@ class LookdevRuntime:
                 },
             )
         self.send("stageSelectionChanged", self.selection.payload())
+        self.send_aov_state()
 
     def _load_stage_async(self, asset_path: Path | None) -> None:
         try:
@@ -195,6 +232,7 @@ class LookdevRuntime:
                 "stage_version": self.stage_version,
             },
         )
+        self.send_aov_state()
 
     def _render_loop(self) -> None:
         frame_interval = 1.0 / max(1, self.config.fps)
@@ -227,6 +265,7 @@ class LookdevRuntime:
 
     def _handle_frame(self, frame) -> None:
         self._last_frame = frame
+        self._update_available_aovs(getattr(frame, "render_vars", {}), notify=True)
         if not self.ready.is_set():
             print(f"First ovrtx frame ready: {self.config.width}x{self.config.height}")
             self.ready.set()
@@ -280,7 +319,8 @@ class LookdevRuntime:
         elif kind == "render_setting_changed":
             key = command.get("key")
             if key == "aov":
-                self._active_aov = self.settings.render_settings().get("aov", "LdrColor")
+                requested = str(command.get("value") or self.settings.render_settings().get("aov", "LdrColor"))
+                self.set_active_aov(requested)
 
     def _fit_camera(self) -> None:
         center, size = self.queries.estimated_content_bounds() or ((0.0, 1.0, 0.0), (4.0, 3.0, 4.0))
@@ -346,27 +386,27 @@ class LookdevRuntime:
         if self.stream is None:
             return
         render_vars = getattr(frame, "render_vars", {})
-        source = self._active_aov if self._active_aov in render_vars else "LdrColor"
-        if source not in render_vars:
+        if self._aov_converter is None:
             return
-        # The production path maps the selected render var on CUDA, converts to
-        # persistent BGRA8, then wraps it as ovstream.VideoFrame. The exact helper
-        # differs by ovstream wheel revision, so keep this call isolated.
+        source = self._active_aov if self._active_aov in self._available_aovs else "LdrColor"
         candidates = [source]
-        if source != "LdrColor" and "LdrColor" in render_vars:
+        if source != "LdrColor":
             candidates.append("LdrColor")
         for candidate in candidates:
             try:
-                mapped = render_vars[candidate].map(device=self.ovrtx.Device.CUDA)
+                copied = self._aov_converter.copy_to_stream_buffer(render_vars, candidate, self.ovrtx.Device.CUDA)
+                if not copied or self._aov_converter.stream_buffer is None:
+                    raise RuntimeError(f"Unable to convert {candidate} to BGRA8")
+                stream_buffer = self._aov_converter.stream_buffer
                 if self._stream_uses_tensor_input:
-                    dlpack_source = mapped.__dlpack__() if hasattr(mapped, "__dlpack__") else mapped
+                    dlpack_source = stream_buffer.__dlpack__() if hasattr(stream_buffer, "__dlpack__") else stream_buffer
                     video_frame = self.ovstream.VideoFrame.from_dlpack(dlpack_source)
                 else:
-                    video_frame = self.ovstream.VideoFrame.from_cuda_array(mapped)
+                    video_frame = self.ovstream.VideoFrame.from_cuda_array(stream_buffer)
                 self.stream.stream_video(video_frame)
                 self._last_video_frame = video_frame
                 if candidate != source:
-                    print(f"stream_video fell back from {source} to {candidate}")
+                    self._report_aov_error(f"stream_video fell back from {source} to {candidate}")
                 self._last_stream_error = ""
                 return
             except Exception as exc:
@@ -374,6 +414,32 @@ class LookdevRuntime:
                 if message != self._last_stream_error:
                     print(f"stream_video failed for {candidate}: {message}")
                     self._last_stream_error = message
+        self._stream_last_video_frame()
+
+    def _update_available_aovs(self, render_vars: Any, notify: bool = False) -> None:
+        if self._aov_converter is None:
+            available = ["LdrColor"]
+        else:
+            available = self._aov_converter.available_from(render_vars)
+        next_available = set(available)
+        changed = next_available != self._available_aovs
+        self._available_aovs = next_available
+        if self._active_aov not in self._available_aovs:
+            previous = self._active_aov
+            self._active_aov = "LdrColor"
+            self.settings.render_settings()["aov"] = "LdrColor"
+            self.settings.save()
+            changed = True
+            self._report_aov_error(f"AOV {previous} is unavailable for the current render product; reverted to Beauty.")
+        if notify and changed:
+            self.send_aov_state()
+
+    def _report_aov_error(self, message: str) -> None:
+        if message == self._last_aov_error:
+            return
+        self._last_aov_error = message
+        print(message)
+        self.send("activeAOVState", self.active_aov_state({"result": "error", "reason": message}))
 
     def _stream_last_video_frame(self) -> None:
         if self.stream is None or self._last_video_frame is None:

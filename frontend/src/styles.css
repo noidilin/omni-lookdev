@@ -37,6 +37,12 @@ button:hover {
   background: #2b333b;
 }
 
+button:disabled {
+  color: #6f7b84;
+  background: #171c21;
+  cursor: not-allowed;
+}
+
 input,
 select {
   border: 1px solid #3a4148;
@@ -321,6 +327,42 @@ h2 {
   align-items: center;
 }
 
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  width: 100%;
+  border: 1px solid #3a4148;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #151a1f;
+}
+
+.segmented-control button {
+  min-width: 0;
+  min-height: 32px;
+  border: 0;
+  border-right: 1px solid #3a4148;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+.segmented-control button:last-child {
+  border-right: 0;
+}
+
+.segmented-control button.active {
+  background: #2f5c70;
+  color: #ffffff;
+}
+
+.inline-status {
+  color: #ffb3b3;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .field-group {
   border-top: 1px solid #273039;
   margin-top: 8px;
@@ -406,4 +448,3 @@ h2 {
     grid-template-rows: 1fr;
   }
 }
-

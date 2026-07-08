@@ -25,6 +25,7 @@ export function App() {
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [capabilities, setCapabilities] = useState<RenderSettingCapability[]>([]);
   const [availableAovs, setAvailableAovs] = useState<string[]>(['LdrColor']);
+  const [aovStatus, setAovStatus] = useState('');
   const [viewerError, setViewerError] = useState('');
   const selectedPathRef = useRef('');
   const rootPathRef = useRef('/');
@@ -101,9 +102,17 @@ export function App() {
           setSettings((payload.settings as Record<string, unknown>) || {});
           setCapabilities((payload.capabilities as RenderSettingCapability[]) || []);
           break;
-        case 'activeAOVState':
+        case 'activeAOVState': {
+          const active = String(payload.active || 'LdrColor');
+          setSettings((previous) => ({ ...previous, aov: active }));
           setAvailableAovs(((payload.available as string[]) || []).filter(Boolean));
+          if (payload.result === 'error') {
+            setAovStatus(String(payload.reason || 'AOV unavailable'));
+          } else if (payload.result === 'success') {
+            setAovStatus('');
+          }
           break;
+        }
         case 'availableAOVsResult':
           setAvailableAovs((((payload.aovs as string[]) || (payload.available as string[]) || []) as string[]).filter(Boolean));
           break;
@@ -119,6 +128,7 @@ export function App() {
     if (status !== 'connected') return;
     sendMessage({ event_type: 'listAssetsRequest', payload: {} });
     sendMessage({ event_type: 'getRenderSettingsRequest', payload: {} });
+    sendMessage({ event_type: 'getAvailableAOVs', payload: {} });
   }, [status, sendMessage]);
 
   const selectPrim = useCallback(
@@ -162,7 +172,14 @@ export function App() {
             settings={settings}
             capabilities={capabilities}
             availableAovs={availableAovs}
-            onChange={(key, value) => sendMessage({ event_type: 'setRenderSettingRequest', payload: { key, value } })}
+            aovStatus={aovStatus}
+            onChange={(key, value) => {
+              if (key === 'aov') {
+                sendMessage({ event_type: 'changeAOVRequest', payload: { aov: value } });
+              } else {
+                sendMessage({ event_type: 'setRenderSettingRequest', payload: { key, value } });
+              }
+            }}
           />
         </aside>
       </main>

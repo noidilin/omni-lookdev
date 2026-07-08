@@ -5,7 +5,7 @@ import threading
 import time
 from typing import Any
 
-from .render_settings import CAPABILITIES, capabilities_payload, coerce_setting
+from .render_settings import CAPABILITIES, aov_options_payload, capabilities_payload, coerce_setting
 
 
 class MessageRouter:
@@ -81,6 +81,9 @@ class MessageRouter:
 
     def _handle_setRenderSettingRequest(self, payload: dict) -> None:
         key = str(payload.get("key") or "")
+        if key == "aov":
+            self._handle_changeAOVRequest({"aov": payload.get("value")})
+            return
         capability = CAPABILITIES.get(key)
         if capability is None or not capability.validated or capability.applies_at == "unsupported":
             self.runtime.send(
@@ -113,7 +116,35 @@ class MessageRouter:
         )
 
     def _handle_changeAOVRequest(self, payload: dict) -> None:
-        self._handle_setRenderSettingRequest({"key": "aov", "value": payload.get("aov") or payload.get("name")})
+        requested = coerce_setting("aov", payload.get("aov") or payload.get("name"))
+        if not isinstance(requested, str) or not requested:
+            self.runtime.send_aov_state({"result": "error", "reason": "Missing AOV name"})
+            return
+        previous = self.runtime._active_aov
+        if self.runtime.set_active_aov(requested):
+            self._send_render_settings(
+                {
+                    "key": "aov",
+                    "result": "success",
+                    "applied": True,
+                    "applies_at": "immediate",
+                    "requires_reload": False,
+                    "requires_reconnect": False,
+                }
+            )
+            self.runtime.send_aov_state({"result": "success", "previous": previous, "requested": requested})
+            return
+        self.runtime.send_aov_state(
+            {
+                "result": "error",
+                "previous": previous,
+                "requested": requested,
+                "reason": "AOV is not available for the current render product",
+            }
+        )
+
+    def _handle_getAvailableAOVs(self, _payload: dict) -> None:
+        self.runtime.send_aov_state()
 
     def _handle_fitCameraRequest(self, payload: dict) -> None:
         self.runtime.enqueue({"type": "fit_camera", "path": payload.get("path")})
@@ -127,14 +158,11 @@ class MessageRouter:
             {
                 "settings": self.runtime.settings.render_settings(),
                 "capabilities": capabilities_payload(),
+                "aov_options": aov_options_payload(),
                 **extra,
             },
         )
-        available = self.runtime.available_aovs()
-        self.runtime.send(
-            "activeAOVState",
-            {"active": self.runtime.settings.render_settings().get("aov", "LdrColor"), "available": available},
-        )
+        self.runtime.send_aov_state()
 
     def _push_initial_state(self) -> None:
         time.sleep(0.3)
