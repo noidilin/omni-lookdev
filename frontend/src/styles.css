@@ -194,11 +194,12 @@ h2 {
   border-bottom: 1px solid #273039;
 }
 
-.asset-load-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 6px;
-  padding: 10px;
+.asset-pane-status {
+  display: block;
+  margin-top: 2px;
+  color: #ffd166;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .asset-list,
@@ -214,14 +215,70 @@ h2 {
   margin: 0 10px 6px;
   padding: 8px;
   display: grid;
-  gap: 2px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
   text-align: left;
+}
+
+.asset-row.current {
+  border-color: #2f7359;
+  background: #1a2a24;
+}
+
+.asset-row.loading {
+  border-color: #7c6926;
+  background: #2c2818;
+}
+
+.asset-row.failed {
+  border-color: #784044;
+  background: #2c1e22;
+}
+
+.asset-row:disabled {
+  opacity: 1;
+}
+
+.asset-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
 }
 
 .asset-row small {
   color: #8e9aa4;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-status {
+  justify-self: end;
+  min-width: 64px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #e7ecef;
+  background: #263039;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.asset-status.current {
+  color: #c7f7df;
+  background: #15533c;
+}
+
+.asset-status.loading {
+  color: #ffe5a3;
+  background: #5d461b;
+}
+
+.asset-status.failed {
+  color: #ffb3b3;
+  background: #543245;
 }
 
 .empty {

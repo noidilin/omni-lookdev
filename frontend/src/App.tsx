@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isAssetCurrent } from './assets/assetStatus';
 import { AssetLoader } from './components/AssetLoader';
 import { PropertyPanel } from './components/PropertyPanel';
 import { RenderSettingsPanel } from './components/RenderSettingsPanel';
@@ -22,6 +23,8 @@ export function App() {
   const [properties, setProperties] = useState<Properties | null>(null);
   const [primCount, setPrimCount] = useState(0);
   const [currentAsset, setCurrentAsset] = useState('');
+  const [pendingAssetPath, setPendingAssetPath] = useState('');
+  const [failedAssetPath, setFailedAssetPath] = useState('');
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [capabilities, setCapabilities] = useState<RenderSettingCapability[]>([]);
   const [availableAovs, setAvailableAovs] = useState<string[]>(['LdrColor']);
@@ -30,6 +33,8 @@ export function App() {
   const selectedPathRef = useRef('');
   const rootPathRef = useRef('/');
   const stageVersionRef = useRef(0);
+  const currentAssetRef = useRef('');
+  const pendingAssetPathRef = useRef('');
 
   const requestChildren = useCallback(
     (primPath: string) => {
@@ -52,11 +57,16 @@ export function App() {
           break;
         case 'openStageResult': {
           const root = String(payload.root_prim_path || '/');
+          const assetUrl = String(payload.url || '');
           const stageVersion = Number(payload.stage_version ?? stageVersionRef.current);
           stageVersionRef.current = stageVersion;
           rootPathRef.current = root;
           setRootPath(root);
-          setCurrentAsset(String(payload.url || ''));
+          currentAssetRef.current = assetUrl;
+          pendingAssetPathRef.current = '';
+          setCurrentAsset(assetUrl);
+          setPendingAssetPath('');
+          setFailedAssetPath('');
           setTree([]);
           setSelectedPath('');
           selectedPathRef.current = '';
@@ -118,6 +128,11 @@ export function App() {
           break;
         case 'viewerError':
           setViewerError(String(payload.message || payload.code || 'Viewer error'));
+          if (pendingAssetPathRef.current) {
+            setFailedAssetPath(pendingAssetPathRef.current);
+            pendingAssetPathRef.current = '';
+            setPendingAssetPath('');
+          }
           break;
       }
     });
@@ -134,6 +149,23 @@ export function App() {
   const selectPrim = useCallback(
     (path: string) => {
       sendMessage({ event_type: 'selectPrimsRequest', payload: { paths: path ? [path] : [] } });
+    },
+    [sendMessage],
+  );
+
+  const refreshAssets = useCallback(() => {
+    setFailedAssetPath('');
+    sendMessage({ event_type: 'listAssetsRequest', payload: {} });
+  }, [sendMessage]);
+
+  const requestAssetLoad = useCallback(
+    (path: string) => {
+      const nextPath = path.trim();
+      if (!nextPath || isAssetCurrent(currentAssetRef.current, nextPath)) return;
+      setFailedAssetPath('');
+      pendingAssetPathRef.current = nextPath;
+      setPendingAssetPath(nextPath);
+      sendMessage({ event_type: 'loadAssetRequest', payload: { path: nextPath } });
     },
     [sendMessage],
   );
@@ -155,7 +187,15 @@ export function App() {
       </header>
       <main className="workspace">
         <aside className="panel left-panel" onPointerEnter={() => sendMessage({ event_type: 'setViewportInputActive', payload: { active: false } })}>
-          <AssetLoader assets={assets} onRefresh={() => sendMessage({ event_type: 'listAssetsRequest', payload: {} })} onLoad={(path) => sendMessage({ event_type: 'loadAssetRequest', payload: { path } })} />
+          <AssetLoader
+            assets={assets}
+            currentAsset={currentAsset}
+            pendingAssetPath={pendingAssetPath}
+            failedAssetPath={failedAssetPath}
+            isSwitching={Boolean(pendingAssetPath)}
+            onRefresh={refreshAssets}
+            onLoad={requestAssetLoad}
+          />
           <StageTree prims={tree} selectedPath={selectedPath} onExpand={requestChildren} onSelect={selectPrim} />
         </aside>
         <section className="viewport-panel">
