@@ -1,0 +1,14 @@
+.venv/
+.venv-linux/
+.venv-win-runtime/
+.cache/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+*.log
+logs/
+data/generated/
+validation/artifacts/
+frontend/dist/
+frontend/node_modules/
