@@ -13,6 +13,7 @@ import type { AssetItem, ServerPrim, USDPrim } from './types/usd';
 import { normalizePrim, updatePrimChildren } from './types/usd';
 
 type Properties = Record<string, unknown>;
+type StageOperation = 'idle' | 'switching' | 'reloading';
 
 export function App() {
   const { status, errorMessage, sendMessage, onCustomEvent, config } = useStreaming();
@@ -25,6 +26,8 @@ export function App() {
   const [currentAsset, setCurrentAsset] = useState('');
   const [pendingAssetPath, setPendingAssetPath] = useState('');
   const [failedAssetPath, setFailedAssetPath] = useState('');
+  const [stageOperation, setStageOperation] = useState<StageOperation>('idle');
+  const [reloadError, setReloadError] = useState('');
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [capabilities, setCapabilities] = useState<RenderSettingCapability[]>([]);
   const [availableAovs, setAvailableAovs] = useState<string[]>(['LdrColor']);
@@ -35,6 +38,12 @@ export function App() {
   const stageVersionRef = useRef(0);
   const currentAssetRef = useRef('');
   const pendingAssetPathRef = useRef('');
+  const stageOperationRef = useRef<StageOperation>('idle');
+
+  const setStageOperationState = useCallback((operation: StageOperation) => {
+    stageOperationRef.current = operation;
+    setStageOperation(operation);
+  }, []);
 
   const requestChildren = useCallback(
     (primPath: string) => {
@@ -67,6 +76,8 @@ export function App() {
           setCurrentAsset(assetUrl);
           setPendingAssetPath('');
           setFailedAssetPath('');
+          setReloadError('');
+          setStageOperationState('idle');
           setTree([]);
           setSelectedPath('');
           selectedPathRef.current = '';
@@ -126,18 +137,30 @@ export function App() {
         case 'availableAOVsResult':
           setAvailableAovs((((payload.aovs as string[]) || (payload.available as string[]) || []) as string[]).filter(Boolean));
           break;
+        case 'assetReloadResult':
+          setStageOperationState('idle');
+          if (payload.result === 'error') {
+            setReloadError(String(payload.message || 'Reload failed'));
+          } else {
+            setReloadError('');
+          }
+          break;
         case 'viewerError':
           setViewerError(String(payload.message || payload.code || 'Viewer error'));
-          if (pendingAssetPathRef.current) {
+          if (stageOperationRef.current === 'switching' && pendingAssetPathRef.current) {
             setFailedAssetPath(pendingAssetPathRef.current);
             pendingAssetPathRef.current = '';
             setPendingAssetPath('');
+            setStageOperationState('idle');
+          } else if (stageOperationRef.current === 'reloading') {
+            setReloadError(String(payload.message || payload.code || 'Reload failed'));
+            setStageOperationState('idle');
           }
           break;
       }
     });
     return unsubscribe;
-  }, [isCurrentStage, onCustomEvent, sendMessage]);
+  }, [isCurrentStage, onCustomEvent, sendMessage, setStageOperationState]);
 
   useEffect(() => {
     if (status !== 'connected') return;
@@ -154,6 +177,7 @@ export function App() {
   );
 
   const refreshAssets = useCallback(() => {
+    if (stageOperationRef.current !== 'idle') return;
     setFailedAssetPath('');
     sendMessage({ event_type: 'listAssetsRequest', payload: {} });
   }, [sendMessage]);
@@ -161,14 +185,31 @@ export function App() {
   const requestAssetLoad = useCallback(
     (path: string) => {
       const nextPath = path.trim();
-      if (!nextPath || isAssetCurrent(currentAssetRef.current, nextPath)) return;
+      if (stageOperationRef.current !== 'idle' || !nextPath || isAssetCurrent(currentAssetRef.current, nextPath)) return;
       setFailedAssetPath('');
+      setReloadError('');
       pendingAssetPathRef.current = nextPath;
       setPendingAssetPath(nextPath);
+      setStageOperationState('switching');
       sendMessage({ event_type: 'loadAssetRequest', payload: { path: nextPath } });
     },
-    [sendMessage],
+    [sendMessage, setStageOperationState],
   );
+
+  const requestAssetReload = useCallback(
+    () => {
+      if (stageOperationRef.current !== 'idle' || !currentAssetRef.current) return;
+      setFailedAssetPath('');
+      setReloadError('');
+      setStageOperationState('reloading');
+      sendMessage({ event_type: 'reloadAssetRequest', payload: {} });
+    },
+    [sendMessage, setStageOperationState],
+  );
+
+  const isSwitching = stageOperation === 'switching';
+  const isReloading = stageOperation === 'reloading';
+  const isStageBusy = stageOperation !== 'idle';
 
   return (
     <div className="app-shell">
@@ -192,8 +233,12 @@ export function App() {
             currentAsset={currentAsset}
             pendingAssetPath={pendingAssetPath}
             failedAssetPath={failedAssetPath}
-            isSwitching={Boolean(pendingAssetPath)}
+            isSwitching={isSwitching}
+            isReloading={isReloading}
+            isStageBusy={isStageBusy}
+            reloadError={reloadError}
             onRefresh={refreshAssets}
+            onReload={requestAssetReload}
             onLoad={requestAssetLoad}
           />
           <StageTree prims={tree} selectedPath={selectedPath} onExpand={requestChildren} onSelect={selectPrim} />

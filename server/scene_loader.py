@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+import re
 
 from .config import OV_CAMERA_PRIM, OV_RENDER_PRODUCT
 
@@ -28,14 +30,38 @@ def make_lookdev_composite(
     width: int,
     height: int,
     settings: dict,
+    cache_bust_token: str | None = None,
+    asset_reference_stage: Path | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    composite = output_dir / "_lookdev_viewer_composite.usda"
+    composite = output_dir / _composite_filename(asset_stage, cache_bust_token)
     composite.write_text(
-        make_lookdev_composite_text(studio_stage, asset_stage, output_dir, width, height, settings),
+        make_lookdev_composite_text(
+            studio_stage,
+            asset_reference_stage or asset_stage,
+            output_dir,
+            width,
+            height,
+            settings,
+        ),
         encoding="utf-8",
     )
     return composite
+
+
+def _composite_filename(asset_stage: Path | None, cache_bust_token: str | None = None) -> str:
+    if asset_stage is None:
+        if cache_bust_token:
+            token_digest = hashlib.sha1(cache_bust_token.encode("utf-8")).hexdigest()[:12]
+            return f"_lookdev_viewer_composite_empty_{token_digest}.usda"
+        return "_lookdev_viewer_composite_empty.usda"
+    resolved = asset_stage.resolve()
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.stem).strip("._") or "asset"
+    digest = hashlib.sha1(str(resolved).encode("utf-8")).hexdigest()[:12]
+    if cache_bust_token:
+        token_digest = hashlib.sha1(cache_bust_token.encode("utf-8")).hexdigest()[:12]
+        return f"_lookdev_viewer_composite_{stem}_{digest}_{token_digest}.usda"
+    return f"_lookdev_viewer_composite_{stem}_{digest}.usda"
 
 
 def make_lookdev_composite_text(

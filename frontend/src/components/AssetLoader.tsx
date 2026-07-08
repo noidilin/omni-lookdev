@@ -7,7 +7,11 @@ type Props = {
   pendingAssetPath: string;
   failedAssetPath: string;
   isSwitching: boolean;
+  isReloading: boolean;
+  isStageBusy: boolean;
+  reloadError: string;
   onRefresh: () => void;
+  onReload: () => void;
   onLoad: (path: string) => void;
 };
 
@@ -23,7 +27,11 @@ export function AssetLoader({
   pendingAssetPath,
   failedAssetPath,
   isSwitching,
+  isReloading,
+  isStageBusy,
+  reloadError,
   onRefresh,
+  onReload,
   onLoad,
 }: Props) {
   return (
@@ -32,14 +40,19 @@ export function AssetLoader({
         <div>
           <h2>Asset</h2>
           {isSwitching && <span className="asset-pane-status">Switching asset...</span>}
+          {isReloading && <span className="asset-pane-status">Reloading asset...</span>}
         </div>
-        <button type="button" onClick={onRefresh} disabled={isSwitching}>Refresh</button>
+        <div className="pane-actions">
+          <button type="button" onClick={onRefresh} disabled={isStageBusy}>Refresh</button>
+          <button type="button" onClick={onReload} disabled={isStageBusy || !currentAsset}>Reload Asset</button>
+        </div>
       </div>
+      {reloadError && <p className="asset-error">Reload failed: {reloadError}</p>}
       <div className="asset-list">
         {assets.map((asset) => {
           const status = getAssetRowStatus(asset.path, currentAsset, pendingAssetPath, failedAssetPath);
           const isCurrent = isAssetCurrent(currentAsset, asset.path);
-          const isDisabled = isSwitching || isCurrent;
+          const isDisabled = isStageBusy || isCurrent;
           return (
             <button
               key={asset.id}

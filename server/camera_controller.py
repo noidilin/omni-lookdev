@@ -34,6 +34,31 @@ class OrbitCamera:
         self._last_pos = None
         self._active_button = None
 
+    def snapshot(self) -> dict:
+        return {
+            "target": self.target.copy(),
+            "distance": self.distance,
+            "azimuth": self.azimuth,
+            "elevation": self.elevation,
+        }
+
+    def restore(self, snapshot: dict) -> bool:
+        target = np.asarray(snapshot.get("target"), dtype=np.float64)
+        distance = float(snapshot.get("distance", float("nan")))
+        azimuth = float(snapshot.get("azimuth", float("nan")))
+        elevation = float(snapshot.get("elevation", float("nan")))
+        if target.shape != (3,) or not np.isfinite(target).all():
+            return False
+        if not all(math.isfinite(value) for value in (distance, azimuth, elevation)):
+            return False
+        self.target = target
+        self.distance = distance
+        self.azimuth = azimuth
+        self.elevation = elevation
+        self.cancel_interaction()
+        self._sanitize()
+        return True
+
     def on_mouse_button_down(self, x: float, y: float, button: int) -> None:
         self._active_button = button
         self._last_pos = (x, y)
@@ -128,4 +153,3 @@ class OrbitCamera:
         if target.shape != (3,) or not np.isfinite(target).all():
             target = np.zeros(3, dtype=np.float64)
         self.target = target
-

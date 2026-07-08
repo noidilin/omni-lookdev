@@ -194,12 +194,36 @@ h2 {
   border-bottom: 1px solid #273039;
 }
 
+.pane-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.pane-actions button {
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
 .asset-pane-status {
   display: block;
   margin-top: 2px;
   color: #ffd166;
   font-size: 11px;
   line-height: 1.2;
+}
+
+.asset-error {
+  margin: 8px 10px 0;
+  padding: 7px 8px;
+  border: 1px solid #784044;
+  border-radius: 6px;
+  color: #ffb3b3;
+  background: #2c1e22;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .asset-list,

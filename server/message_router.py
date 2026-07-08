@@ -36,6 +36,9 @@ class MessageRouter:
         path = str(payload.get("path") or "")
         self.runtime.enqueue({"type": "load_asset", "path": path})
 
+    def _handle_reloadAssetRequest(self, _payload: dict) -> None:
+        self.runtime.enqueue({"type": "reload_asset"})
+
     def _handle_getChildrenRequest(self, payload: dict) -> None:
         prim_path = str(payload.get("prim_path") or self.runtime.queries.root_prim_path)
         self.runtime.send(

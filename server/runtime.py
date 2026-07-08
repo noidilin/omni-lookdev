@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
+import re
+import shutil
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -64,6 +67,7 @@ class LookdevRuntime:
         self._camera_dirty = False
         self._camera_interaction_active = False
         self._last_video_frame = None
+        self._reload_sequence = 0
 
     def enqueue(self, command: dict[str, Any]) -> None:
         self.commands.put(command)
@@ -164,25 +168,82 @@ class LookdevRuntime:
                 config.video_input = ovstream.VideoInput.CUDA
         self.stream.start(config)
 
-    def _load_stage(self, asset_path: Path | None) -> None:
+    def _load_stage(self, asset_path: Path | None, *, reload_current: bool = False) -> None:
+        previous_asset_path = self.current_asset_path
+        previous_composite_path = self.current_composite_path
+        previous_queries = self.queries
+        previous_stage_version = self.stage_version
+        previous_selected_paths = list(self.selection.selected_paths)
+        previous_pickable_paths = set(self.selection.pickable_paths)
+        camera_snapshot = self.camera.snapshot() if reload_current else None
+        cache_bust_token = self._next_reload_token(asset_path) if reload_current and asset_path is not None else None
+        cache_bust_asset_stage = None
+        if reload_current and asset_path is not None and cache_bust_token is not None:
+            cache_bust_asset_stage = self._cache_bust_asset_snapshot(asset_path, cache_bust_token)
+        next_queries = StageQueryCache()
         with self.stage_lock:
-            self.selection.clear()
-            self.current_asset_path = asset_path
-            self.current_composite_path = make_lookdev_composite(
+            composite_path = make_lookdev_composite(
                 self.config.studio_stage,
                 asset_path,
                 self.config.generated_dir,
                 self.config.width,
                 self.config.height,
                 self.settings.render_settings(),
+                cache_bust_token=cache_bust_token,
+                asset_reference_stage=cache_bust_asset_stage,
             )
-            self.renderer.open_usd(str(self.current_composite_path))
-            stage_ready = self._refresh_queries_after_load(asset_path)
+            try:
+                self.renderer.open_usd(str(composite_path))
+                stage_ready = self._refresh_queries_after_load(
+                    asset_path,
+                    composite_path,
+                    next_queries,
+                    stream_warmup_frames=not reload_current,
+                )
+                if reload_current and not stage_ready:
+                    detail = next_queries.last_error or f"Reloaded stage did not include {LOOKDEV_ASSET_PRIM}"
+                    raise RuntimeError(detail)
+            except Exception:
+                if reload_current:
+                    self.current_asset_path = previous_asset_path
+                    self.current_composite_path = previous_composite_path
+                    self.queries = previous_queries
+                    self.stage_version = previous_stage_version
+                    self.selection.selected_paths = previous_selected_paths
+                    self.selection.pickable_paths = previous_pickable_paths
+                    if previous_composite_path is not None:
+                        try:
+                            self.renderer.open_usd(str(previous_composite_path))
+                            self._refresh_queries_after_load(
+                                previous_asset_path,
+                                previous_composite_path,
+                                previous_queries,
+                                stream_warmup_frames=False,
+                            )
+                        except Exception as rollback_exc:
+                            self.send(
+                                "viewerError",
+                                {"code": "stage_reload_rollback_failed", "message": str(rollback_exc)},
+                            )
+                    if cache_bust_asset_stage is not None:
+                        self._delete_reload_asset_snapshot(cache_bust_asset_stage)
+                raise
+            self.selection.clear()
+            self.current_asset_path = asset_path
+            self.current_composite_path = composite_path
+            self.queries = next_queries
             self.stage_version += 1
             self._active_camera_prim = OV_CAMERA_PRIM
             self._camera_dirty = False
             self._camera_interaction_active = False
             self.camera.cancel_interaction()
+            if reload_current and camera_snapshot is not None:
+                if self.camera.restore(camera_snapshot):
+                    self._camera_dirty = True
+                else:
+                    self._fit_camera()
+            if cache_bust_asset_stage is not None and asset_path is not None:
+                self._cleanup_reload_asset_snapshots(asset_path, keep=cache_bust_asset_stage)
         self.send(
             "openStageResult",
             {
@@ -204,12 +265,32 @@ class LookdevRuntime:
             )
         self.send("stageSelectionChanged", self.selection.payload())
         self.send_aov_state()
+        if reload_current:
+            self.send(
+                "assetReloadResult",
+                {
+                    "result": "success",
+                    "stage_version": self.stage_version,
+                    "url": str(asset_path or ""),
+                },
+            )
 
-    def _load_stage_async(self, asset_path: Path | None) -> None:
+    def _load_stage_async(self, asset_path: Path | None, *, reload_current: bool = False) -> None:
         try:
-            self._load_stage(asset_path)
+            self._load_stage(asset_path, reload_current=reload_current)
         except Exception as exc:
-            self.send("viewerError", {"code": "stage_load_failed", "message": str(exc)})
+            if reload_current:
+                self.send(
+                    "assetReloadResult",
+                    {
+                        "result": "error",
+                        "message": str(exc),
+                        "stage_version": self.stage_version,
+                        "url": str(self.current_asset_path) if self.current_asset_path else "",
+                    },
+                )
+            else:
+                self.send("viewerError", {"code": "stage_load_failed", "message": str(exc)})
         finally:
             self.loading_stage.clear()
 
@@ -293,6 +374,29 @@ class LookdevRuntime:
             else:
                 self.loading_stage.set()
                 threading.Thread(target=self._load_stage_async, args=(asset_path,), daemon=True).start()
+        elif kind == "reload_asset":
+            if self.current_asset_path is None:
+                self.send(
+                    "assetReloadResult",
+                    {"result": "error", "message": "No asset is currently loaded.", "stage_version": self.stage_version},
+                )
+            elif self.loading_stage.is_set():
+                self.send(
+                    "assetReloadResult",
+                    {
+                        "result": "error",
+                        "message": "A stage load is already in progress.",
+                        "stage_version": self.stage_version,
+                    },
+                )
+            else:
+                self.loading_stage.set()
+                threading.Thread(
+                    target=self._load_stage_async,
+                    args=(self.current_asset_path,),
+                    kwargs={"reload_current": True},
+                    daemon=True,
+                ).start()
         elif kind == "cancel_interaction":
             self.camera.cancel_interaction()
             self._camera_interaction_active = False
@@ -328,25 +432,35 @@ class LookdevRuntime:
         self._camera_dirty = True
         self.send("cameraStateChanged", self.camera.state_payload())
 
-    def _refresh_queries_after_load(self, asset_path: Path | None) -> bool:
+    def _refresh_queries_after_load(
+        self,
+        asset_path: Path | None,
+        composite_path: Path | None = None,
+        queries: StageQueryCache | None = None,
+        *,
+        stream_warmup_frames: bool = True,
+    ) -> bool:
+        query_cache = queries or self.queries
         expected_path = LOOKDEV_ASSET_PRIM if asset_path is not None else ""
         frame_interval = 1.0 / max(1, self.config.fps)
         for attempt in range(12):
-            self.queries.refresh_from_renderer(self.renderer)
-            if not expected_path or expected_path in self.queries.paths:
+            query_cache.refresh_from_renderer(self.renderer)
+            if not expected_path or expected_path in query_cache.paths:
                 return True
             try:
                 products = self.renderer.step(render_products={OV_RENDER_PRODUCT}, delta_time=frame_interval)
-                self._handle_render_products(products)
+                if stream_warmup_frames:
+                    self._handle_render_products(products)
             except Exception as exc:
                 if attempt == 11:
                     self.send("viewerError", {"code": "stage_warmup_failed", "message": str(exc)})
             time.sleep(0.05)
-        self.queries.refresh_from_renderer(self.renderer)
-        if expected_path and expected_path not in self.queries.paths and self.current_composite_path is not None:
-            if self.queries.refresh_from_usd_file(self.current_composite_path):
-                return expected_path in self.queries.paths
-        return not expected_path or expected_path in self.queries.paths
+        query_cache.refresh_from_renderer(self.renderer)
+        fallback_path = composite_path or self.current_composite_path
+        if expected_path and expected_path not in query_cache.paths and fallback_path is not None:
+            if query_cache.refresh_from_usd_file(fallback_path):
+                return expected_path in query_cache.paths
+        return not expected_path or expected_path in query_cache.paths
 
     def _write_camera(self) -> None:
         matrix = np.ascontiguousarray(self.camera.get_camera_xform(), dtype=np.float64)
@@ -452,6 +566,43 @@ class LookdevRuntime:
     @staticmethod
     def _same_path(left: Path, right: Path) -> bool:
         return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+    def _next_reload_token(self, asset_path: Path) -> str:
+        self._reload_sequence += 1
+        try:
+            stat = asset_path.stat()
+            metadata = f"mtime={stat.st_mtime_ns}:size={stat.st_size}"
+        except OSError as exc:
+            metadata = f"stat_error={type(exc).__name__}"
+        return f"path={asset_path.resolve()}:metadata={metadata}:seq={self._reload_sequence}"
+
+    def _cache_bust_asset_snapshot(self, asset_path: Path, cache_bust_token: str) -> Path:
+        resolved = asset_path.resolve()
+        stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.stem).strip("._") or "asset"
+        path_digest = hashlib.sha1(str(resolved).encode("utf-8")).hexdigest()[:12]
+        token_digest = hashlib.sha1(cache_bust_token.encode("utf-8")).hexdigest()[:12]
+        snapshot = resolved.with_name(f"._lookdev_reload_{stem}_{path_digest}_{token_digest}{resolved.suffix}")
+        shutil.copy2(resolved, snapshot)
+        return snapshot
+
+    def _cleanup_reload_asset_snapshots(self, asset_path: Path, *, keep: Path) -> None:
+        resolved = asset_path.resolve()
+        stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.stem).strip("._") or "asset"
+        path_digest = hashlib.sha1(str(resolved).encode("utf-8")).hexdigest()[:12]
+        pattern = f"._lookdev_reload_{stem}_{path_digest}_*{resolved.suffix}"
+        for candidate in resolved.parent.glob(pattern):
+            if candidate.resolve() == keep.resolve():
+                continue
+            self._delete_reload_asset_snapshot(candidate)
+
+    @staticmethod
+    def _delete_reload_asset_snapshot(snapshot: Path) -> None:
+        try:
+            snapshot.unlink()
+        except FileNotFoundError:
+            return
+        except OSError:
+            return
 
     def _start_health_server(self) -> None:
         ready = self.ready
