@@ -1,0 +1,59 @@
+[tools]
+python = "3.11"
+node = "20"
+
+[env]
+OVRTX_SKIP_USD_CHECK = "1"
+XDG_CACHE_HOME = "{{config_root}}/.cache"
+CUDA_CACHE_PATH = "{{config_root}}/.cache/cuda"
+__GL_SHADER_DISK_CACHE_PATH = "{{config_root}}/.cache/gl"
+npm_config_cache = "{{config_root}}/.cache/npm"
+
+[tasks."setup:server"]
+description = "Linux RTX host only: install ovrtx/ovstream server runtime dependencies."
+env = { VENV_DIR = ".venv-linux" }
+run = "python scripts/setup_dev.py && .venv-linux/bin/python -m pip install -r server/requirements.txt"
+
+[tasks."setup:server:win"]
+description = "Native Windows RTX host: create .venv-win-runtime and install ovrtx/ovstream server dependencies."
+run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup_windows_runtime.ps1"
+
+[tasks."setup:dev"]
+description = "Cross-platform authoring setup: create venv with non-GPU dev deps."
+run = "python scripts/setup_dev.py"
+
+[tasks."setup:frontend"]
+description = "Install React frontend dependencies."
+dir = "frontend"
+run = "npm install"
+
+[tasks.setup]
+description = "Install cross-platform authoring dependencies."
+depends = ["setup:dev", "setup:frontend"]
+
+[tasks."run:server"]
+description = "Run the ovrtx/ovstream WebRTC server."
+run = """
+mkdir -p .cache/cuda .cache/gl .cache/npm logs data/generated
+. .venv-linux/bin/activate
+python -m server.ov_web_viewer_server
+"""
+
+[tasks."run:server:win"]
+description = "Run the ovrtx/ovstream WebRTC server from the native Windows runtime venv."
+run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_server_windows.ps1"
+
+[tasks."dev:frontend"]
+description = "Run the Vite React frontend."
+dir = "frontend"
+run = "npm run dev -- --host 0.0.0.0"
+
+[tasks."build:frontend"]
+description = "Build the React frontend."
+dir = "frontend"
+run = "npm run build"
+
+[tasks.validate]
+description = "Run static validation available on the current host."
+depends = ["build:frontend"]
+run = "python -m compileall server"

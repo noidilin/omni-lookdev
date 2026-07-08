@@ -1,0 +1,6 @@
+ovrtx --index-url https://pypi.nvidia.com --extra-index-url https://pypi.org/simple
+ovstream
+warp-lang
+numpy
+usd-core==24.11
+
