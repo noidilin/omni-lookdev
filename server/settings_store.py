@@ -12,7 +12,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "denoiser": True,
         "resolution": {"width": 1920, "height": 1080},
         "viewer_lighting": {
-            "enabled": True,
+            "enabled": False,
+            "fallback": False,
             "key_intensity": 500.0,
             "fill_intensity": 80.0,
             "environment_intensity": 1.0,
@@ -51,4 +52,3 @@ class SettingsStore:
                 SettingsStore._deep_update(target[key], value)
             else:
                 target[key] = value
-

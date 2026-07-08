@@ -57,15 +57,19 @@ CAPABILITIES: dict[str, RenderSettingCapability] = {
         key="viewer_lighting",
         label="Viewer Lighting",
         control="group",
-        applies_at="reload_required",
-        apply_path="viewer-owned lights in generated composite stage",
-        validated=True,
+        applies_at="unsupported",
+        apply_path="studio-authored lookdev lighting is used by default",
+        validated=False,
     ),
 }
 
 
 def capabilities_payload() -> list[dict[str, Any]]:
-    return [asdict(capability) for capability in CAPABILITIES.values()]
+    return [
+        asdict(capability)
+        for capability in CAPABILITIES.values()
+        if capability.validated and capability.applies_at != "unsupported"
+    ]
 
 
 def coerce_setting(key: str, value: Any) -> Any:
@@ -84,10 +88,10 @@ def coerce_setting(key: str, value: Any) -> Any:
         return {"width": width, "height": height}
     if key == "viewer_lighting":
         return {
-            "enabled": bool(value.get("enabled", True)),
+            "enabled": bool(value.get("enabled", False)),
+            "fallback": bool(value.get("fallback", False)),
             "key_intensity": float(value.get("key_intensity", 500.0)),
             "fill_intensity": float(value.get("fill_intensity", 80.0)),
             "environment_intensity": float(value.get("environment_intensity", 1.0)),
         }
     return value
-

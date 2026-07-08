@@ -12,6 +12,7 @@ GENERATED_DIR = DATA_DIR / "generated"
 SETTINGS_PATH = DATA_DIR / "viewer-settings.json"
 
 OV_CAMERA_PRIM = "/OVCamera"
+STUDIO_CAMERA_PRIM = "/root/medium/Camera"
 OV_RENDER_PRODUCT = "/Render/OVServer/ViewportTexture0"
 LOOKDEV_ASSET_PRIM = "/LookdevAsset"
 
@@ -38,4 +39,3 @@ class ServerConfig:
     @property
     def stream_resolution(self) -> tuple[int, int]:
         return self.width, self.height
-

@@ -53,8 +53,9 @@ export function StreamingProvider({ children }: { children: React.ReactNode }) {
             },
             onUpdate: () => undefined,
             onCustomEvent: (event: unknown) => {
-              if (!isServerEvent(event)) return;
-              handlersRef.current.forEach((handler) => handler(event));
+              const serverEvent = parseServerEvent(event);
+              if (!serverEvent) return;
+              handlersRef.current.forEach((handler) => handler(serverEvent));
             },
             onStop: () => {
               connectedRef.current = false;
@@ -93,6 +94,30 @@ export function useStreaming() {
   const value = useContext(StreamingContext);
   if (!value) throw new Error('useStreaming must be used inside StreamingProvider');
   return value;
+}
+
+function parseServerEvent(value: unknown): ServerEvent | null {
+  let candidate = value;
+  if (typeof candidate === 'string') {
+    try {
+      candidate = JSON.parse(candidate) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (candidate && typeof candidate === 'object' && 'messageType' in candidate && 'data' in candidate) {
+    const wrapped = candidate as { data?: unknown };
+    candidate = wrapped.data;
+    if (typeof candidate === 'string') {
+      try {
+        candidate = JSON.parse(candidate) as unknown;
+      } catch {
+        return null;
+      }
+    }
+  }
+  if (!isServerEvent(candidate)) return null;
+  return candidate;
 }
 
 function isServerEvent(value: unknown): value is ServerEvent {

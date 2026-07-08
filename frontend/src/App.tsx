@@ -27,13 +27,20 @@ export function App() {
   const [availableAovs, setAvailableAovs] = useState<string[]>(['LdrColor']);
   const [viewerError, setViewerError] = useState('');
   const selectedPathRef = useRef('');
+  const rootPathRef = useRef('/');
+  const stageVersionRef = useRef(0);
 
   const requestChildren = useCallback(
     (primPath: string) => {
-      sendMessage({ event_type: 'getChildrenRequest', payload: { prim_path: primPath } });
+      sendMessage({ event_type: 'getChildrenRequest', payload: { prim_path: primPath, stage_version: stageVersionRef.current } });
     },
     [sendMessage],
   );
+
+  const isCurrentStage = useCallback((payload: Record<string, unknown>): boolean => {
+    const version = payload.stage_version;
+    return version === undefined || Number(version) === stageVersionRef.current;
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onCustomEvent((event: ServerEvent) => {
@@ -44,24 +51,31 @@ export function App() {
           break;
         case 'openStageResult': {
           const root = String(payload.root_prim_path || '/');
+          const stageVersion = Number(payload.stage_version ?? stageVersionRef.current);
+          stageVersionRef.current = stageVersion;
+          rootPathRef.current = root;
           setRootPath(root);
           setCurrentAsset(String(payload.url || ''));
           setTree([]);
           setSelectedPath('');
           selectedPathRef.current = '';
           setProperties(null);
-          requestChildren(root);
-          sendMessage({ event_type: 'getPrimCountRequest', payload: {} });
+          sendMessage({ event_type: 'getChildrenRequest', payload: { prim_path: root, stage_version: stageVersion } });
+          sendMessage({ event_type: 'getPrimCountRequest', payload: { stage_version: stageVersion } });
           break;
         }
         case 'getChildrenResult': {
-          const primPath = String(payload.prim_path || rootPath);
+          if (!isCurrentStage(payload)) break;
+          const primPath = String(payload.prim_path || rootPathRef.current);
           const children = ((payload.children as ServerPrim[]) || []).map(normalizePrim);
-          if (primPath === rootPath || tree.length === 0) setTree(children);
-          else setTree((previous) => updatePrimChildren(previous, primPath, children));
+          setTree((previous) => (
+            primPath === rootPathRef.current || previous.length === 0
+              ? children
+              : updatePrimChildren(previous, primPath, children)
+          ));
           sendMessage({
             event_type: 'makePrimsSelectable',
-            payload: { paths: children.map((child) => child.path) },
+            payload: { paths: children.map((child) => child.path), stage_version: stageVersionRef.current },
           });
           break;
         }
@@ -74,11 +88,13 @@ export function App() {
           break;
         }
         case 'getPropertiesResponse': {
+          if (!isCurrentStage(payload)) break;
           const primPath = String(payload.prim_path || '');
           if (primPath === selectedPathRef.current) setProperties((payload.properties as Properties) || {});
           break;
         }
         case 'getPrimCountResult':
+          if (!isCurrentStage(payload)) break;
           setPrimCount(Number(payload.count || 0));
           break;
         case 'renderSettingsChanged':
@@ -97,7 +113,7 @@ export function App() {
       }
     });
     return unsubscribe;
-  }, [onCustomEvent, requestChildren, rootPath, sendMessage, tree.length]);
+  }, [isCurrentStage, onCustomEvent, sendMessage]);
 
   useEffect(() => {
     if (status !== 'connected') return;
@@ -153,4 +169,3 @@ export function App() {
     </div>
   );
 }
-

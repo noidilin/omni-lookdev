@@ -38,17 +38,32 @@ class MessageRouter:
 
     def _handle_getChildrenRequest(self, payload: dict) -> None:
         prim_path = str(payload.get("prim_path") or self.runtime.queries.root_prim_path)
-        self.runtime.send("getChildrenResult", {"prim_path": prim_path, "children": self.runtime.queries.get_children(prim_path)})
+        self.runtime.send(
+            "getChildrenResult",
+            {
+                "prim_path": prim_path,
+                "children": self.runtime.queries.get_children(prim_path),
+                "stage_version": self.runtime.stage_version,
+            },
+        )
 
     def _handle_getPropertiesRequest(self, payload: dict) -> None:
         prim_path = str(payload.get("prim_path") or "")
         self.runtime.send(
             "getPropertiesResponse",
-            {"prim_path": prim_path, "properties": self.runtime.queries.get_properties(prim_path), "truncated": False},
+            {
+                "prim_path": prim_path,
+                "properties": self.runtime.queries.get_properties(prim_path),
+                "truncated": False,
+                "stage_version": self.runtime.stage_version,
+            },
         )
 
     def _handle_getPrimCountRequest(self, _payload: dict) -> None:
-        self.runtime.send("getPrimCountResult", {"count": self.runtime.queries.prim_count()})
+        self.runtime.send(
+            "getPrimCountResult",
+            {"count": self.runtime.queries.prim_count(), "stage_version": self.runtime.stage_version},
+        )
 
     def _handle_selectPrimsRequest(self, payload: dict) -> None:
         paths = [str(path) for path in payload.get("paths", []) if path]
@@ -66,7 +81,8 @@ class MessageRouter:
 
     def _handle_setRenderSettingRequest(self, payload: dict) -> None:
         key = str(payload.get("key") or "")
-        if key not in CAPABILITIES:
+        capability = CAPABILITIES.get(key)
+        if capability is None or not capability.validated or capability.applies_at == "unsupported":
             self.runtime.send(
                 "renderSettingsChanged",
                 {
@@ -82,7 +98,6 @@ class MessageRouter:
             )
             return
         value = coerce_setting(key, payload.get("value"))
-        capability = CAPABILITIES[key]
         self.runtime.settings.render_settings()[key] = value
         self.runtime.settings.save()
         self.runtime.enqueue({"type": "render_setting_changed", "key": key})
@@ -129,6 +144,7 @@ class MessageRouter:
                 "url": str(self.runtime.current_asset_path) if self.runtime.current_asset_path else "",
                 "result": "success",
                 "root_prim_path": self.runtime.queries.root_prim_path,
+                "stage_version": self.runtime.stage_version,
                 "mode": "lookdev_asset",
             },
         )
@@ -137,6 +153,7 @@ class MessageRouter:
             {
                 "prim_path": self.runtime.queries.root_prim_path,
                 "children": self.runtime.queries.get_children(self.runtime.queries.root_prim_path),
+                "stage_version": self.runtime.stage_version,
             },
         )
         self.runtime.send("listAssetsResult", {"assets": self.runtime.assets.list_assets()})
@@ -168,4 +185,3 @@ class MessageRouter:
         if not isinstance(msg, dict) or "event_type" not in msg:
             return None
         return msg
-

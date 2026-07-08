@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import LOOKDEV_ASSET_PRIM, OV_CAMERA_PRIM, OV_RENDER_PRODUCT
+from .config import OV_CAMERA_PRIM, OV_RENDER_PRODUCT
 
 
-CAMERA_HORIZONTAL_APERTURE = 20.955
+STUDIO_CAMERA_XFORM = (
+    (1.0, 0.0, 0.0, 0.0),
+    (0.0, 0.049989992045490705, 0.9987497187460389, 0.0),
+    (0.0, -0.9987497187460389, 0.049989992045490705, 0.0),
+    (0.0, -12.266838073730469, 1.600000023841858, 1.0),
+)
 
 
 def _asset_ref(path: Path, base_dir: Path) -> str:
@@ -43,14 +48,13 @@ def make_lookdev_composite_text(
 ) -> str:
     safe_width = max(1, int(width))
     safe_height = max(1, int(height))
-    vertical_aperture = CAMERA_HORIZONTAL_APERTURE * float(safe_height) / float(safe_width)
     studio_ref = _asset_ref(studio_stage, base_dir)
     asset_block = ""
     if asset_stage is not None:
         asset_ref = _asset_ref(asset_stage, base_dir)
         asset_block = f'''
 def Xform "LookdevAsset" (
-    prepend references = @{asset_ref}@
+    prepend references = @{asset_ref}@</root>
 )
 {{
 }}
@@ -58,32 +62,19 @@ def Xform "LookdevAsset" (
 
     samples = int(settings.get("samples_per_pixel", 64))
     denoiser = 1 if settings.get("denoiser", True) else 0
+    vertical_aperture = 0.36000001430511475 * float(safe_height) / float(safe_width)
+    camera_rows = ",".join(
+        "(" + ",".join(f"{value:.15g}" for value in row) + ")" for row in STUDIO_CAMERA_XFORM
+    )
     lighting = settings.get("viewer_lighting", {})
-    light_enabled = bool(lighting.get("enabled", True))
+    studio_environment_intensity = max(1.0, float(lighting.get("environment_intensity", 1.0))) * 500.0
+    light_enabled = bool(lighting.get("enabled", False)) and bool(lighting.get("fallback", False))
     key_intensity = float(lighting.get("key_intensity", 500.0)) if light_enabled else 0.0
     fill_intensity = float(lighting.get("fill_intensity", 80.0)) if light_enabled else 0.0
     environment_intensity = float(lighting.get("environment_intensity", 1.0)) if light_enabled else 0.0
-
-    return f'''#usda 1.0
-(
-    subLayers = [
-        @{studio_ref}@
-    ]
-    defaultPrim = "World"
-)
-
-{asset_block}
-def Camera "OVCamera"
-{{
-    float2 clippingRange = (0.01, 10000000)
-    float focalLength = 18.15
-    float horizontalAperture = {CAMERA_HORIZONTAL_APERTURE:.3f}
-    float verticalAperture = {vertical_aperture:.4f}
-    token projection = "perspective"
-    matrix4d xformOp:transform = ((1,0,0,0),(0,1,0,0),(0,0,1,0),(0,0,0,1))
-    uniform token[] xformOpOrder = ["xformOp:transform"]
-}}
-
+    viewer_lighting_block = ""
+    if light_enabled:
+        viewer_lighting_block = f'''
 def Scope "ViewerLighting"
 {{
     def DomeLight "Environment"
@@ -104,6 +95,38 @@ def Scope "ViewerLighting"
         double3 xformOp:translate = (-4, 3, 2)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }}
+}}
+'''
+
+    return f'''#usda 1.0
+(
+    subLayers = [
+        @{studio_ref}@
+    ]
+    defaultPrim = "root"
+)
+
+{asset_block}
+{viewer_lighting_block}
+
+over "root"
+{{
+    over "env_light"
+    {{
+        float inputs:intensity = {studio_environment_intensity:.4f}
+        float inputs:exposure = 2
+    }}
+}}
+
+def Camera "OVCamera"
+{{
+    float focalLength = 1
+    float horizontalAperture = 0.36000001430511475
+    float verticalAperture = {vertical_aperture:.15g}
+    float2 clippingRange = (0.1, 1000)
+    token projection = "perspective"
+    matrix4d xformOp:transform = ({camera_rows})
+    uniform token[] xformOpOrder = ["xformOp:transform"]
 }}
 
 def Scope "Render"
@@ -170,4 +193,3 @@ def Scope "Render"
     }}
 }}
 '''
-

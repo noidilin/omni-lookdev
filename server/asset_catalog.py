@@ -27,6 +27,14 @@ class AssetCatalog:
                 )
         return rows
 
+    def first_asset(self) -> Path | None:
+        if not self.asset_root.exists():
+            return None
+        for path in sorted(self.asset_root.rglob("*")):
+            if path.is_file() and path.suffix.lower() in USD_EXTENSIONS:
+                return path.resolve()
+        return None
+
     def resolve(self, requested: str) -> Path:
         if not requested:
             raise ValueError("Asset path is required")
@@ -42,4 +50,3 @@ class AssetCatalog:
         if not any(os.path.commonpath([str(candidate), str(root)]) == str(root) for root in allowed_roots):
             raise PermissionError(f"Asset is outside allowed roots: {candidate}")
         return candidate
-
