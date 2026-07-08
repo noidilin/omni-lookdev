@@ -68,6 +68,7 @@ class LookdevRuntime:
         self._camera_interaction_active = False
         self._last_video_frame = None
         self._reload_sequence = 0
+        self._reloaded_asset_references: dict[str, tuple[Path, str]] = {}
 
     def enqueue(self, command: dict[str, Any]) -> None:
         self.commands.put(command)
@@ -179,6 +180,9 @@ class LookdevRuntime:
         cache_bust_asset_stage = None
         if reload_current and asset_path is not None and cache_bust_token is not None:
             cache_bust_asset_stage = self._cache_bust_asset_snapshot(asset_path, cache_bust_token)
+        asset_reference_stage = cache_bust_asset_stage
+        if not reload_current and asset_path is not None:
+            asset_reference_stage, cache_bust_token = self._reloaded_asset_reference(asset_path)
         next_queries = StageQueryCache()
         with self.stage_lock:
             composite_path = make_lookdev_composite(
@@ -189,7 +193,7 @@ class LookdevRuntime:
                 self.config.height,
                 self.settings.render_settings(),
                 cache_bust_token=cache_bust_token,
-                asset_reference_stage=cache_bust_asset_stage,
+                asset_reference_stage=asset_reference_stage,
             )
             try:
                 self.renderer.open_usd(str(composite_path))
@@ -237,7 +241,8 @@ class LookdevRuntime:
             self._camera_interaction_active = False
             self.camera.cancel_interaction()
             self.camera.set_from_xform(STUDIO_CAMERA_XFORM)
-            if cache_bust_asset_stage is not None and asset_path is not None:
+            if cache_bust_asset_stage is not None and asset_path is not None and cache_bust_token is not None:
+                self._reloaded_asset_references[self._path_key(asset_path)] = (cache_bust_asset_stage, cache_bust_token)
                 self._cleanup_reload_asset_snapshots(asset_path, keep=cache_bust_asset_stage)
         self.send(
             "openStageResult",
@@ -560,7 +565,22 @@ class LookdevRuntime:
 
     @staticmethod
     def _same_path(left: Path, right: Path) -> bool:
-        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+        return LookdevRuntime._path_key(left) == LookdevRuntime._path_key(right)
+
+    @staticmethod
+    def _path_key(path: Path) -> str:
+        return os.path.normcase(os.path.abspath(path))
+
+    def _reloaded_asset_reference(self, asset_path: Path) -> tuple[Path | None, str | None]:
+        key = self._path_key(asset_path)
+        reference = self._reloaded_asset_references.get(key)
+        if reference is None:
+            return None, None
+        snapshot, token = reference
+        if snapshot.exists():
+            return snapshot, token
+        self._reloaded_asset_references.pop(key, None)
+        return None, None
 
     def _next_reload_token(self, asset_path: Path) -> str:
         self._reload_sequence += 1

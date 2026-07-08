@@ -53,6 +53,52 @@ class RuntimeReloadCameraTests(unittest.TestCase):
             np.testing.assert_allclose(runtime.camera.get_camera_xform(), np.asarray(STUDIO_CAMERA_XFORM), atol=1e-10)
             self.assertGreater(len(runtime.renderer.opened_paths), 0)
 
+    def test_selecting_asset_after_reload_reuses_cache_busted_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            studio = root / "lookdev-studio.usdc"
+            asset_root = root / "assets"
+            generated = root / "generated"
+            settings = root / "viewer-settings.json"
+            first_asset = asset_root / "first.usdc"
+            second_asset = asset_root / "second.usdc"
+            asset_root.mkdir()
+            studio.write_text("#usda 1.0\n", encoding="utf-8")
+            first_asset.write_text("#usda 1.0\n", encoding="utf-8")
+            second_asset.write_text("#usda 1.0\n", encoding="utf-8")
+            runtime = LookdevRuntime(
+                ServerConfig(
+                    studio_stage=studio,
+                    asset_root=asset_root,
+                    settings_path=settings,
+                    generated_dir=generated,
+                )
+            )
+            runtime.renderer = FakeRenderer()
+            runtime.current_asset_path = first_asset
+
+            def refresh_queries(_asset_path, _composite_path=None, queries=None, *, stream_warmup_frames=True):
+                queries.paths = [LOOKDEV_ASSET_PRIM]
+                queries.root_prim_path = "/"
+                return True
+
+            runtime._refresh_queries_after_load = refresh_queries
+
+            runtime._load_stage(first_asset, reload_current=True)
+            reloaded_composite = runtime.current_composite_path
+            self.assertIsNotNone(reloaded_composite)
+            reloaded_text = reloaded_composite.read_text(encoding="utf-8")
+            self.assertIn("._lookdev_reload_first_", reloaded_text)
+
+            runtime._load_stage(second_asset)
+            self.assertNotIn("._lookdev_reload_second_", runtime.current_composite_path.read_text(encoding="utf-8"))
+
+            runtime._load_stage(first_asset)
+
+            selected_again_text = runtime.current_composite_path.read_text(encoding="utf-8")
+            self.assertIn("._lookdev_reload_first_", selected_again_text)
+            self.assertEqual(runtime.current_asset_path, first_asset)
+
 
 if __name__ == "__main__":
     unittest.main()
