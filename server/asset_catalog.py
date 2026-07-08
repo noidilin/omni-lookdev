@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 USD_EXTENSIONS = {".usd", ".usda", ".usdc"}
+RELOAD_SNAPSHOT_PREFIX = "._lookdev_reload_"
 
 
 class AssetCatalog:
@@ -17,7 +18,7 @@ class AssetCatalog:
             return []
         rows: list[dict[str, str]] = []
         for path in sorted(self.asset_root.rglob("*")):
-            if path.is_file() and path.suffix.lower() in USD_EXTENSIONS:
+            if self._is_user_asset(path):
                 rows.append(
                     {
                         "id": path.relative_to(self.asset_root).as_posix(),
@@ -31,7 +32,7 @@ class AssetCatalog:
         if not self.asset_root.exists():
             return None
         for path in sorted(self.asset_root.rglob("*")):
-            if path.is_file() and path.suffix.lower() in USD_EXTENSIONS:
+            if self._is_user_asset(path):
                 return path.resolve()
         return None
 
@@ -50,3 +51,11 @@ class AssetCatalog:
         if not any(os.path.commonpath([str(candidate), str(root)]) == str(root) for root in allowed_roots):
             raise PermissionError(f"Asset is outside allowed roots: {candidate}")
         return candidate
+
+    def _is_user_asset(self, path: Path) -> bool:
+        if not path.is_file() or path.suffix.lower() not in USD_EXTENSIONS:
+            return False
+        relative_parts = path.relative_to(self.asset_root).parts
+        if any(part.startswith(".") for part in relative_parts):
+            return False
+        return not path.name.startswith(RELOAD_SNAPSHOT_PREFIX)

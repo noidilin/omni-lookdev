@@ -59,6 +59,23 @@ class OrbitCamera:
         self._sanitize()
         return True
 
+    def set_from_xform(self, xform: tuple[tuple[float, ...], ...], distance: float = 6.0) -> bool:
+        matrix = np.asarray(xform, dtype=np.float64)
+        if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
+            return False
+        forward = -matrix[2, :3]
+        norm = np.linalg.norm(forward)
+        if norm < 1e-8:
+            return False
+        forward = forward / norm
+        self.elevation = math.asin(max(-1.0, min(1.0, float(forward[1]))))
+        self.azimuth = math.atan2(float(forward[0]), float(forward[2]))
+        self.distance = max(MIN_DISTANCE, float(distance))
+        self.target = matrix[3, :3] + forward * self.distance
+        self.cancel_interaction()
+        self._sanitize()
+        return True
+
     def on_mouse_button_down(self, x: float, y: float, button: int) -> None:
         self._active_button = button
         self._last_pos = (x, y)

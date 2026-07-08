@@ -20,7 +20,7 @@ from .config import LOOKDEV_ASSET_PRIM, OV_CAMERA_PRIM, OV_RENDER_PRODUCT, Serve
 from .input_router import InputRouter
 from .message_router import MessageRouter
 from .render_settings import DEBUG_AOV_NAMES, aov_options_payload
-from .scene_loader import make_lookdev_composite
+from .scene_loader import STUDIO_CAMERA_XFORM, make_lookdev_composite
 from .selection_controller import SelectionController
 from .settings_store import SettingsStore
 from .stage_queries import StageQueryCache
@@ -175,7 +175,6 @@ class LookdevRuntime:
         previous_stage_version = self.stage_version
         previous_selected_paths = list(self.selection.selected_paths)
         previous_pickable_paths = set(self.selection.pickable_paths)
-        camera_snapshot = self.camera.snapshot() if reload_current else None
         cache_bust_token = self._next_reload_token(asset_path) if reload_current and asset_path is not None else None
         cache_bust_asset_stage = None
         if reload_current and asset_path is not None and cache_bust_token is not None:
@@ -237,11 +236,7 @@ class LookdevRuntime:
             self._camera_dirty = False
             self._camera_interaction_active = False
             self.camera.cancel_interaction()
-            if reload_current and camera_snapshot is not None:
-                if self.camera.restore(camera_snapshot):
-                    self._camera_dirty = True
-                else:
-                    self._fit_camera()
+            self.camera.set_from_xform(STUDIO_CAMERA_XFORM)
             if cache_bust_asset_stage is not None and asset_path is not None:
                 self._cleanup_reload_asset_snapshots(asset_path, keep=cache_bust_asset_stage)
         self.send(
